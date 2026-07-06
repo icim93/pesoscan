@@ -103,6 +103,29 @@
     display:flex; align-items:center; justify-content:center;
     height:100%; color:var(--muted); font-size:13px; text-align:center; padding:20px;
   }
+  .candidate-badge{
+    position:absolute; left:0; right:0; top:10px;
+    display:flex; justify-content:center; pointer-events:none;
+  }
+  .candidate-badge span{
+    background:rgba(10,14,22,.82); border:1px solid rgba(227,178,60,.55);
+    color:var(--gold); font-family:var(--mono); font-size:12.5px;
+    padding:5px 12px; border-radius:999px; opacity:0; transition:opacity .15s ease;
+  }
+  .candidate-badge span.on{opacity:1;}
+  .shutter-wrap{
+    position:absolute; left:0; right:0; bottom:34px;
+    display:flex; justify-content:center; pointer-events:none;
+  }
+  #btnCapture{
+    pointer-events:auto;
+    width:66px; height:66px; border-radius:50%;
+    background:var(--gold); border:4px solid rgba(255,255,255,.85);
+    box-shadow:0 3px 14px rgba(0,0,0,.5);
+    font-size:0;
+  }
+  #btnCapture:active{ transform:scale(.93); }
+  #btnCapture.disabled{ background:var(--muted); pointer-events:none; opacity:.6; }
 
   .manual{
     margin:0 18px 8px; display:flex; gap:8px;
@@ -186,6 +209,10 @@
 <div class="cam-wrap">
   <video id="video" playsinline muted></video>
   <div class="cam-frame" id="camFrame" style="display:none;"></div>
+  <div class="candidate-badge"><span id="candidateBadge"></span></div>
+  <div class="shutter-wrap" id="shutterWrap" style="display:none;">
+    <button id="btnCapture" title="Cattura">Cattura</button>
+  </div>
   <div class="cam-status" id="camStatus"></div>
   <div class="cam-off" id="camOff">Fotocamera non avviata.<br>Tocca "Avvia scansione" qui sotto.</div>
 </div>
@@ -223,7 +250,7 @@
       <input type="number" id="cfgDiv" min="1">
     </div>
     <div class="field">
-      <label>Cooldown anti-doppia lettura (ms)</label>
+      <label>Blocco tra due catture consecutive (ms)</label>
       <input type="number" id="cfgCooldown" min="0" step="100">
     </div>
     <div class="dlg-actions">
@@ -240,7 +267,7 @@
   var STORAGE_KEY = "pesoscan_state_v1";
   var CFG_KEY = "pesoscan_cfg_v1";
 
-  var defaultCfg = { start: 8, len: 5, div: 1000, cooldown: 1800 };
+  var defaultCfg = { start: 8, len: 5, div: 1000, cooldown: 500 };
   var cfg = loadCfg();
   var state = loadState(); // { items: [{code, weightKg, ts}], lastCodeTs: {} }
 
@@ -261,12 +288,18 @@
   var manualAdd = document.getElementById('manualAdd');
   var gear = document.getElementById('gear');
   var dlg = document.getElementById('settingsDlg');
+  var candidateBadge = document.getElementById('candidateBadge');
+  var shutterWrap = document.getElementById('shutterWrap');
+  var btnCapture = document.getElementById('btnCapture');
 
   var stream = null;
   var detector = null;
   var scanning = false;
   var rafId = null;
-  var lastSeen = {}; // code -> timestamp, for cooldown
+  var cropCanvas = document.createElement('canvas');
+  var cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
+  var candidate = null; // { code, ts }
+  var lastCaptureTs = 0;
 
   function loadCfg(){
     try{
@@ -344,22 +377,14 @@
     return grams / cfg.div;
   }
 
-  function tryAddCode(code, opts){
-    opts = opts || {};
+  function tryAddCode(code){
     code = String(code).trim();
     var now = Date.now();
-    if(!opts.force){
-      var last = lastSeen[code];
-      if(last && (now - last) < cfg.cooldown){
-        return false; // still in cooldown, ignore silently
-      }
-    }
     var w = parseWeight(code);
     if(w === null || w <= 0){
       camStatus.textContent = 'Codice non valido: ' + code;
       return false;
     }
-    lastSeen[code] = now;
     state.items.push({ code: code, weightKg: w, ts: now });
     saveState();
     render();
@@ -392,10 +417,12 @@
     await video.play();
     camOff.style.display = 'none';
     camFrame.style.display = 'block';
+    shutterWrap.style.display = 'flex';
     detector = new BarcodeDetector({ formats: ['ean_13','ean_8','upc_a','upc_e','code_128'] });
     scanning = true;
     btnScan.textContent = 'Ferma scansione';
     btnScan.classList.add('active');
+    camStatus.textContent = 'Inquadra il codice nel riquadro, poi tocca Cattura';
     loop();
   }
 
@@ -406,9 +433,30 @@
     video.srcObject = null;
     camOff.style.display = 'flex';
     camFrame.style.display = 'none';
+    shutterWrap.style.display = 'none';
     btnScan.textContent = 'Avvia scansione';
     btnScan.classList.remove('active');
     camStatus.textContent = '';
+    candidate = null;
+    candidateBadge.classList.remove('on');
+  }
+
+  // The visual guide box insets the video by 14% on every side (see .cam-frame).
+  // We crop detection to that same region so codes outside the frame (e.g. the
+  // barcode on the layer below) are never picked up.
+  var GUIDE_INSET = 0.14;
+
+  function cropToGuide(){
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if(!vw || !vh) return null;
+    var x = Math.round(vw * GUIDE_INSET);
+    var y = Math.round(vh * GUIDE_INSET);
+    var w = Math.round(vw * (1 - 2*GUIDE_INSET));
+    var h = Math.round(vh * (1 - 2*GUIDE_INSET));
+    cropCanvas.width = w;
+    cropCanvas.height = h;
+    cropCtx.drawImage(video, x, y, w, h, 0, 0, w, h);
+    return cropCanvas;
   }
 
   var busy = false;
@@ -417,10 +465,16 @@
     if(!busy && video.readyState >= 2){
       busy = true;
       try{
-        var codes = await detector.detect(video);
-        if(codes && codes.length){
-          for(var i=0;i<codes.length;i++){
-            tryAddCode(codes[i].rawValue);
+        var frame = cropToGuide();
+        if(frame){
+          var codes = await detector.detect(frame);
+          if(codes && codes.length){
+            candidate = { code: codes[0].rawValue, ts: Date.now() };
+            var w = parseWeight(candidate.code);
+            candidateBadge.textContent = candidate.code + (w!==null ? ('  \u2192 ' + fmtKg(w) + ' kg') : '  (formato non valido)');
+            candidateBadge.classList.add('on');
+          } else if(candidate && (Date.now() - candidate.ts) > 500){
+            candidateBadge.classList.remove('on');
           }
         }
       }catch(e){ /* ignore transient detection errors */ }
@@ -431,6 +485,21 @@
 
   btnScan.addEventListener('click', function(){
     if(scanning) stopScan(); else startScan();
+  });
+
+  btnCapture.addEventListener('click', function(){
+    var now = Date.now();
+    if(now - lastCaptureTs < cfg.cooldown) return;
+    if(!candidate || (now - candidate.ts) > 900){
+      camStatus.textContent = 'Nessun codice nel riquadro: avvicina o centra meglio.';
+      return;
+    }
+    lastCaptureTs = now;
+    var added = tryAddCode(candidate.code);
+    if(added){
+      btnCapture.classList.add('disabled');
+      setTimeout(function(){ btnCapture.classList.remove('disabled'); }, Math.max(250, cfg.cooldown));
+    }
   });
 
   btnUndo.addEventListener('click', function(){
@@ -444,7 +513,6 @@
     if(state.items.length===0) return;
     if(confirm('Azzerare tutte le letture e il totale?')){
       state.items = [];
-      lastSeen = {};
       saveState();
       render();
     }
@@ -453,7 +521,7 @@
   manualAdd.addEventListener('click', function(){
     var v = manualInput.value.trim();
     if(!v) return;
-    tryAddCode(v, {force:true});
+    tryAddCode(v);
     manualInput.value = '';
     manualInput.focus();
   });
