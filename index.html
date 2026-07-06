@@ -99,6 +99,11 @@
     background:linear-gradient(0deg, rgba(0,0,0,.65), transparent);
     color:var(--paper); font-family:var(--mono);
   }
+  #qrReaderFallback{position:absolute; inset:0; display:none; background:#000;}
+  #qrReaderFallback video, #qrReaderFallback canvas{
+    width:100% !important; height:100% !important; object-fit:cover;
+  }
+  #qrReaderFallback img{display:none;}
   .cam-off{
     display:flex; align-items:center; justify-content:center;
     height:100%; color:var(--muted); font-size:13px; text-align:center; padding:20px;
@@ -208,6 +213,7 @@
 
 <div class="cam-wrap">
   <video id="video" playsinline muted></video>
+  <div id="qrReaderFallback"></div>
   <div class="cam-frame" id="camFrame" style="display:none;"></div>
   <div class="candidate-badge"><span id="candidateBadge"></span></div>
   <div class="shutter-wrap" id="shutterWrap" style="display:none;">
@@ -300,6 +306,22 @@
   var cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
   var candidate = null; // { code, ts }
   var lastCaptureTs = 0;
+  var usingFallback = false;
+  var html5QrcodeInstance = null;
+  var html5QrcodeLibPromise = null;
+
+  function loadHtml5QrcodeLib(){
+    if(window.Html5Qrcode) return Promise.resolve();
+    if(html5QrcodeLibPromise) return html5QrcodeLibPromise;
+    html5QrcodeLibPromise = new Promise(function(resolve, reject){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+      s.onload = function(){ resolve(); };
+      s.onerror = function(){ reject(new Error('load-failed')); };
+      document.head.appendChild(s);
+    });
+    return html5QrcodeLibPromise;
+  }
 
   function loadCfg(){
     try{
@@ -400,10 +422,18 @@
   }
 
   async function startScan(){
-    if(!supportsDetector()){
-      camStatus.textContent = 'BarcodeDetector non supportato su questo browser. Usa l\'inserimento manuale, oppure apri con Chrome su Android.';
-      return;
+    if(supportsDetector()){
+      await startScanNative();
+    } else {
+      await startScanFallback();
     }
+  }
+
+  function stopScan(){
+    if(usingFallback) stopScanFallback(); else stopScanNative();
+  }
+
+  async function startScanNative(){
     try{
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width:{ideal:1280}, height:{ideal:960} },
@@ -426,7 +456,7 @@
     loop();
   }
 
-  function stopScan(){
+  function stopScanNative(){
     scanning = false;
     if(rafId) cancelAnimationFrame(rafId);
     if(stream){ stream.getTracks().forEach(function(t){t.stop();}); stream = null; }
@@ -439,6 +469,87 @@
     camStatus.textContent = '';
     candidate = null;
     candidateBadge.classList.remove('on');
+  }
+
+  // ---- fallback path for browsers without BarcodeDetector (notably iOS Safari) ----
+  async function startScanFallback(){
+    camStatus.textContent = 'Caricamento modulo di scansione\u2026';
+    try{
+      await loadHtml5QrcodeLib();
+    }catch(e){
+      camStatus.textContent = 'Impossibile caricare il modulo di scansione: serve connessione internet, almeno la prima volta.';
+      return;
+    }
+    var fallbackEl = document.getElementById('qrReaderFallback');
+    video.style.display = 'none';
+    fallbackEl.style.display = 'block';
+    camOff.style.display = 'none';
+    camFrame.style.display = 'block';
+    shutterWrap.style.display = 'flex';
+
+    var formats = [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E,
+      Html5QrcodeSupportedFormats.CODE_128
+    ];
+    html5QrcodeInstance = new Html5Qrcode('qrReaderFallback', { formatsToSupport: formats, verbose:false });
+
+    function onDetected(decodedText){
+      candidate = { code: decodedText, ts: Date.now() };
+      var w = parseWeight(candidate.code);
+      candidateBadge.textContent = candidate.code + (w!==null ? ('  \u2192 ' + fmtKg(w) + ' kg') : '  (formato non valido)');
+      candidateBadge.classList.add('on');
+    }
+    function onScanError(){
+      if(candidate && (Date.now() - candidate.ts) > 800){
+        candidateBadge.classList.remove('on');
+      }
+    }
+
+    try{
+      await html5QrcodeInstance.start(
+        { facingMode: 'environment' },
+        { fps: 10 },
+        onDetected,
+        onScanError
+      );
+      usingFallback = true;
+      scanning = true;
+      btnScan.textContent = 'Ferma scansione';
+      btnScan.classList.add('active');
+      camStatus.textContent = 'Inquadra il codice, poi tocca Cattura (senza riquadro ristretto su iPhone: verifica il codice mostrato prima di catturare)';
+    }catch(err){
+      camStatus.textContent = 'Impossibile accedere alla fotocamera su questo browser.';
+      video.style.display = 'block';
+      fallbackEl.style.display = 'none';
+      camOff.style.display = 'flex';
+      camFrame.style.display = 'none';
+      shutterWrap.style.display = 'none';
+    }
+  }
+
+  function stopScanFallback(){
+    scanning = false;
+    usingFallback = false;
+    camFrame.style.display = 'none';
+    shutterWrap.style.display = 'none';
+    candidate = null;
+    candidateBadge.classList.remove('on');
+    camStatus.textContent = '';
+    var fallbackEl = document.getElementById('qrReaderFallback');
+    if(html5QrcodeInstance){
+      html5QrcodeInstance.stop().then(function(){
+        html5QrcodeInstance.clear();
+        html5QrcodeInstance = null;
+      }).catch(function(){ html5QrcodeInstance = null; });
+    }
+    fallbackEl.style.display = 'none';
+    video.style.display = 'block';
+    camOff.style.display = 'flex';
+    btnScan.textContent = 'Avvia scansione';
+    btnScan.classList.remove('active');
   }
 
   // The visual guide box insets the video by 14% on every side (see .cam-frame).
