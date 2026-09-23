@@ -1,4 +1,4 @@
-var CACHE = 'pesoscan-v2';
+var CACHE = 'pesoscan-v3';
 var ASSETS = [
   './',
   './index.html',
@@ -14,11 +14,19 @@ var ASSETS = [
 ];
 
 self.addEventListener('install', function(e){
+  // Deliberately does NOT call skipWaiting() here: an updated worker should
+  // sit in "waiting" until the page asks it to take over, so the app can
+  // show an update notice instead of silently swapping code under an open,
+  // in-use session.
   e.waitUntil(
-    caches.open(CACHE)
-      .then(function(c){ return c.addAll(ASSETS); })
-      .then(function(){ return self.skipWaiting(); })
+    caches.open(CACHE).then(function(c){ return c.addAll(ASSETS); })
   );
+});
+
+self.addEventListener('message', function(e){
+  if(e.data === 'SKIP_WAITING' || (e.data && e.data.type === 'SKIP_WAITING')){
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', function(e){

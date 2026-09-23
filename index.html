@@ -230,9 +230,17 @@
   .dlg-actions button{flex:1; padding:10px; border-radius:9px; border:none; font-weight:700;}
   .dlg-actions .save{background:var(--gold); color:#1B1502;}
   .dlg-actions .cancel{background:var(--ink-2); color:var(--paper); border:1px solid var(--line);}
+
+  .update-banner{
+    display:none; align-items:center; justify-content:center; gap:8px;
+    background:var(--gold); color:#1B1502; font-size:12.5px; font-weight:700;
+    text-align:center; padding:9px 12px; cursor:pointer;
+  }
 </style>
 </head>
 <body>
+
+<div id="updateBanner" class="update-banner">Nuova versione disponibile — tocca per aggiornare</div>
 
 <header>
   <div>
@@ -621,8 +629,17 @@
     return result;
   }
 
+  // Some decoders (including Chrome's native BarcodeDetector on several
+  // Android devices) prefix a GS1-128 read with its AIM symbology
+  // identifier, e.g. "]C1", to flag that FNC1 was used. That's decoder
+  // metadata, not part of the payload, so we strip it before parsing.
+  var AIM_PREFIX_RE = /^\][A-Za-z]\d/;
+  function stripAimPrefix(code){
+    return AIM_PREFIX_RE.test(code) ? code.slice(3) : code;
+  }
+
   function evaluateCode(rawCode){
-    var code = String(rawCode).trim();
+    var code = stripAimPrefix(String(rawCode).trim());
     if(/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)){
       return evaluateEanWeight(code);
     }
@@ -664,7 +681,7 @@
   }
 
   function tryAddCode(code){
-    code = String(code).trim();
+    code = stripAimPrefix(String(code).trim());
     var now = Date.now();
     var res = evaluateCode(code);
     if(!res.ok){
@@ -751,9 +768,10 @@
   }
 
   function handleCandidate(rawCode){
-    candidate = { code: rawCode, ts: Date.now() };
-    var res = evaluateCode(rawCode);
-    candidateBadge.textContent = rawCode + (res.ok ? ('  → ' + fmtKg(res.weightKg) + ' kg') : '  (non valido)');
+    var code = stripAimPrefix(rawCode);
+    candidate = { code: code, ts: Date.now() };
+    var res = evaluateCode(code);
+    candidateBadge.textContent = code + (res.ok ? ('  → ' + fmtKg(res.weightKg) + ' kg') : '  (non valido)');
     candidateBadge.classList.add('on');
     candidateBadge.classList.toggle('invalid', !res.ok);
 
@@ -761,17 +779,17 @@
       stableCandidate = null;
       return;
     }
-    if(stableCandidate && stableCandidate.code === rawCode){
+    if(stableCandidate && stableCandidate.code === code){
       stableCandidate.count++;
     } else {
-      stableCandidate = { code: rawCode, count: 1 };
+      stableCandidate = { code: code, count: 1 };
     }
     if(stableCandidate.count >= STABILITY_COUNT){
       stableCandidate = null;
       var now = Date.now();
       if(now - lastCaptureTs >= cfg.cooldown){
         lastCaptureTs = now;
-        var added = tryAddCode(rawCode);
+        var added = tryAddCode(code);
         if(added){
           btnCapture.classList.add('disabled');
           setTimeout(function(){ btnCapture.classList.remove('disabled'); }, Math.max(250, cfg.cooldown));
@@ -1097,9 +1115,37 @@
   window.addEventListener('appinstalled', function(){
     btnInstall.style.display = 'none';
   });
+  // ---- service worker + "update available" notice ----
   if('serviceWorker' in navigator){
     window.addEventListener('load', function(){
-      navigator.serviceWorker.register('sw.js').catch(function(){});
+      navigator.serviceWorker.register('sw.js').then(function(reg){
+        function offerUpdate(worker){
+          var banner = document.getElementById('updateBanner');
+          banner.style.display = 'flex';
+          banner.onclick = function(){
+            banner.textContent = 'Aggiornamento in corso…';
+            banner.onclick = null;
+            worker.postMessage('SKIP_WAITING');
+          };
+        }
+        if(reg.waiting) offerUpdate(reg.waiting);
+        reg.addEventListener('updatefound', function(){
+          var installing = reg.installing;
+          if(!installing) return;
+          installing.addEventListener('statechange', function(){
+            if(installing.state === 'installed' && navigator.serviceWorker.controller){
+              offerUpdate(installing);
+            }
+          });
+        });
+      }).catch(function(){});
+
+      var reloadedForUpdate = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function(){
+        if(reloadedForUpdate) return;
+        reloadedForUpdate = true;
+        window.location.reload();
+      });
     });
   }
 
