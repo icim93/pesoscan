@@ -3,6 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101826">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PesoScan">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png" sizes="192x192">
 <title>PesoScan</title>
 <style>
   :root{
@@ -36,6 +43,11 @@
     font-weight:700; margin:0; color:var(--gold);
   }
   header .sub{font-size:11px; color:var(--muted);}
+  .hdr-actions{display:flex; align-items:center; gap:8px;}
+  #btnInstall{
+    background:none;border:1px solid var(--line);color:var(--gold);
+    border-radius:8px;font-size:11px;letter-spacing:.04em;padding:0 10px;height:32px;
+  }
   #gear{
     background:none;border:1px solid var(--line);color:var(--muted);
     width:32px;height:32px;border-radius:8px;font-size:16px;line-height:1;
@@ -118,6 +130,7 @@
     padding:5px 12px; border-radius:999px; opacity:0; transition:opacity .15s ease;
   }
   .candidate-badge span.on{opacity:1;}
+  .candidate-badge span.invalid{border-color:rgba(196,87,74,.65); color:var(--danger);}
   .shutter-wrap{
     position:absolute; left:0; right:0; bottom:34px;
     display:flex; justify-content:center; pointer-events:none;
@@ -147,7 +160,12 @@
   main{flex:1; overflow-y:auto; padding:4px 18px 12px;}
   .list-title{
     font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);
-    margin:10px 2px 6px; display:flex; justify-content:space-between;
+    margin:10px 2px 6px; display:flex; align-items:center; justify-content:space-between;
+  }
+  #btnExport{
+    background:none; border:1px solid var(--line); color:var(--gold);
+    font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+    padding:4px 9px; border-radius:6px;
   }
   ul#log{list-style:none; margin:0; padding:0;}
   ul#log li{
@@ -163,11 +181,11 @@
   .empty{color:var(--muted); font-size:13px; text-align:center; padding:24px 10px;}
 
   footer{
-    display:flex; gap:10px; padding:12px 18px 18px;
+    display:flex; flex-wrap:wrap; gap:10px; padding:12px 18px 18px;
     border-top:1px solid var(--line);
   }
   footer button{
-    flex:1; padding:13px 0; border-radius:12px; border:none; font-weight:700; font-size:14px;
+    flex:1; min-width:100px; padding:13px 0; border-radius:12px; border:none; font-weight:700; font-size:14px;
   }
   #btnScan{background:var(--curd); color:#08150F;}
   #btnScan.active{background:var(--danger); color:#1A0705;}
@@ -178,16 +196,24 @@
   dialog{
     border:none; border-radius:14px; padding:0; width:min(340px, 92vw);
     background:var(--panel); color:var(--paper); font-family:var(--sans);
+    max-height:85vh; overflow-y:auto;
   }
   dialog::backdrop{background:rgba(0,0,0,.55);}
   .dlg-body{padding:18px;}
   .dlg-body h2{font-size:14px; letter-spacing:.08em; text-transform:uppercase; color:var(--gold); margin:0 0 14px;}
+  .dlg-body h3{font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin:18px 0 10px; border-top:1px solid var(--line); padding-top:14px;}
   .field{margin-bottom:12px;}
   .field label{display:block; font-size:11px; color:var(--muted); margin-bottom:4px;}
   .field input{
     width:100%; background:var(--ink-2); border:1px solid var(--line); color:var(--paper);
     border-radius:8px; padding:8px 10px; font-family:var(--mono); font-size:13px;
   }
+  .field.checkbox-field label{
+    display:flex; align-items:center; gap:8px; font-size:12px; color:var(--paper);
+  }
+  .field.checkbox-field input{width:16px; height:16px; flex:none;}
+  .field.pair{display:flex; gap:8px;}
+  .field.pair > div{flex:1;}
   .dlg-actions{display:flex; gap:8px; margin-top:16px;}
   .dlg-actions button{flex:1; padding:10px; border-radius:9px; border:none; font-weight:700;}
   .dlg-actions .save{background:var(--gold); color:#1B1502;}
@@ -201,7 +227,10 @@
     <h1>PesoScan</h1>
     <div class="sub">somma pesi da codici EAN</div>
   </div>
-  <button id="gear" title="Impostazioni">&#9881;</button>
+  <div class="hdr-actions">
+    <button id="btnInstall" title="Installa app" style="display:none;">Installa</button>
+    <button id="gear" title="Impostazioni">&#9881;</button>
+  </div>
 </header>
 
 <div class="readout">
@@ -229,7 +258,7 @@
 </div>
 
 <main>
-  <div class="list-title"><span>Letture</span><span id="listCount">0</span></div>
+  <div class="list-title"><span>Letture <span id="listCount">0</span></span><button id="btnExport" title="Esporta CSV">Esporta CSV</button></div>
   <ul id="log"></ul>
   <div class="empty" id="emptyMsg">Nessuna lettura ancora.</div>
 </main>
@@ -259,6 +288,22 @@
       <label>Blocco tra due catture consecutive (ms)</label>
       <input type="number" id="cfgCooldown" min="0" step="100">
     </div>
+
+    <h3>Prefisso peso variabile</h3>
+    <div class="field checkbox-field">
+      <label><input type="checkbox" id="cfgPrefixOn"> Applica filtro prefisso</label>
+    </div>
+    <div class="field pair">
+      <div>
+        <label>Prefisso minimo</label>
+        <input type="number" id="cfgPrefixMin" min="0" max="99">
+      </div>
+      <div>
+        <label>Prefisso massimo</label>
+        <input type="number" id="cfgPrefixMax" min="0" max="99">
+      </div>
+    </div>
+
     <div class="dlg-actions">
       <button class="cancel" id="cfgCancel">Annulla</button>
       <button class="save" id="cfgSave">Salva</button>
@@ -272,10 +317,13 @@
 
   var STORAGE_KEY = "pesoscan_state_v1";
   var CFG_KEY = "pesoscan_cfg_v1";
+  var DUPLICATE_WINDOW_MS = 10000;
+  var STABILITY_COUNT = 2;
+  var GS1_GS = "\x1D"; // GS1-128 group separator (FNC1), used to terminate variable-length AIs
 
-  var defaultCfg = { start: 8, len: 5, div: 1000, cooldown: 500 };
+  var defaultCfg = { start: 8, len: 5, div: 1000, cooldown: 500, prefixOn: true, prefixMin: 20, prefixMax: 29 };
   var cfg = loadCfg();
-  var state = loadState(); // { items: [{code, weightKg, ts}], lastCodeTs: {} }
+  var state = loadState(); // { items: [{code, weightG, ts}], lastCodeTs: {code: ts} }
 
   var totalEl = document.getElementById('total');
   var countLabel = document.getElementById('countLabel');
@@ -290,6 +338,8 @@
   var btnScan = document.getElementById('btnScan');
   var btnUndo = document.getElementById('btnUndo');
   var btnReset = document.getElementById('btnReset');
+  var btnExport = document.getElementById('btnExport');
+  var btnInstall = document.getElementById('btnInstall');
   var manualInput = document.getElementById('manualInput');
   var manualAdd = document.getElementById('manualAdd');
   var gear = document.getElementById('gear');
@@ -305,6 +355,7 @@
   var cropCanvas = document.createElement('canvas');
   var cropCtx = cropCanvas.getContext('2d', { willReadFrequently: true });
   var candidate = null; // { code, ts }
+  var stableCandidate = null; // { code, count }
   var lastCaptureTs = 0;
   var usingFallback = false;
   var html5QrcodeInstance = null;
@@ -315,7 +366,7 @@
     if(html5QrcodeLibPromise) return html5QrcodeLibPromise;
     html5QrcodeLibPromise = new Promise(function(resolve, reject){
       var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js';
+      s.src = 'vendor/html5-qrcode.min.js';
       s.onload = function(){ resolve(); };
       s.onerror = function(){ reject(new Error('load-failed')); };
       document.head.appendChild(s);
@@ -331,17 +382,28 @@
     return Object.assign({}, defaultCfg);
   }
   function saveCfg(){
-    localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+    try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){}
   }
   function loadState(){
     try{
       var raw = localStorage.getItem(STORAGE_KEY);
-      if(raw) return JSON.parse(raw);
+      if(raw){
+        var parsed = JSON.parse(raw);
+        if(!parsed.items) parsed.items = [];
+        if(!parsed.lastCodeTs) parsed.lastCodeTs = {};
+        parsed.items.forEach(function(it){
+          if(typeof it.weightG !== 'number'){
+            it.weightG = Math.round((it.weightKg||0)*1000);
+          }
+          delete it.weightKg;
+        });
+        return parsed;
+      }
     }catch(e){}
-    return { items: [] };
+    return { items: [], lastCodeTs: {} };
   }
   function saveState(){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
   }
 
   function fmtKg(n){
@@ -349,8 +411,8 @@
   }
 
   function render(){
-    var total = state.items.reduce(function(s,it){return s+it.weightKg;},0);
-    var parts = fmtKg(total).split(',');
+    var totalG = state.items.reduce(function(s,it){return s+it.weightG;},0);
+    var parts = fmtKg(totalG/1000).split(',');
     totalEl.innerHTML = parts[0] + '<small>,' + parts[1] + ' kg</small>';
     countLabel.textContent = state.items.length + (state.items.length===1?' lettura':' letture');
     listCount.textContent = state.items.length;
@@ -365,9 +427,9 @@
         (function(it, idx){
           var li = document.createElement('li');
           var left = document.createElement('div');
-          left.innerHTML = '<div class="w">' + fmtKg(it.weightKg) + ' kg</div><div class="code">' + it.code + '</div>';
+          left.innerHTML = '<div class="w">' + fmtKg(it.weightG/1000) + ' kg</div><div class="code">' + it.code + '</div>';
           var del = document.createElement('button');
-          del.textContent = '\u00D7';
+          del.textContent = '×';
           del.onclick = function(){
             state.items.splice(idx,1);
             saveState();
@@ -388,33 +450,165 @@
     flashEl.classList.add('show');
   }
 
-  function parseWeight(code){
-    if(!/^\d{8,14}$/.test(code)) return null;
+  // ---- GTIN (EAN/UPC) check digit ----
+  function gtinCheckDigit(dataDigits){
+    var sum = 0;
+    for(var i=0;i<dataDigits.length;i++){
+      var d = dataDigits.charCodeAt(dataDigits.length-1-i) - 48;
+      sum += (i % 2 === 0 ? 3 : 1) * d;
+    }
+    return (10 - (sum % 10)) % 10;
+  }
+  function isValidGtin(code){
+    var data = code.slice(0, -1);
+    var check = code.charCodeAt(code.length-1) - 48;
+    return gtinCheckDigit(data) === check;
+  }
+
+  // ---- classic fixed-position EAN weight parsing ----
+  function evaluateEanWeight(code){
+    if(!/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)) return { ok:false };
+    if(!isValidGtin(code)) return { ok:false, reason:'checksum' };
+    if(cfg.prefixOn){
+      var prefix = parseInt(code.slice(0,2),10);
+      if(prefix < cfg.prefixMin || prefix > cfg.prefixMax) return { ok:false, reason:'prefix' };
+    }
     var start = cfg.start - 1;
     var len = cfg.len;
-    if(start < 0 || start + len > code.length) return null;
+    if(start < 0 || start + len > code.length) return { ok:false, reason:'format' };
     var digits = code.substring(start, start+len);
     var grams = parseInt(digits, 10);
-    if(isNaN(grams)) return null;
-    return grams / cfg.div;
+    if(isNaN(grams) || grams <= 0) return { ok:false, reason:'format' };
+    return { ok:true, weightKg: grams / cfg.div };
+  }
+
+  // ---- targeted GS1-128 parser: AI(01) GTIN, AI(10) lot, AI(15/17) dates, AI(3100-3105) net weight kg ----
+  var GS1_AI_TABLE = {
+    '01':   { len:14, type:'gtin' },
+    '10':   { len:-1, type:'lot' },
+    '15':   { len:6,  type:'date' },
+    '17':   { len:6,  type:'date' },
+    '21':   { len:-1, type:'serial' },
+    '3100': { len:6, type:'weight', decimals:0 },
+    '3101': { len:6, type:'weight', decimals:1 },
+    '3102': { len:6, type:'weight', decimals:2 },
+    '3103': { len:6, type:'weight', decimals:3 },
+    '3104': { len:6, type:'weight', decimals:4 },
+    '3105': { len:6, type:'weight', decimals:5 }
+  };
+  function parseGS1_128(raw){
+    var s = String(raw);
+    var i = 0;
+    var result = { gtin: null, weightKg: null };
+    var recognizedAny = false;
+    while(i < s.length){
+      if(s[i] === GS1_GS){ i++; continue; }
+      var ai4 = s.substr(i,4);
+      var ai2 = s.substr(i,2);
+      var aiCode, aiDef;
+      if(GS1_AI_TABLE[ai4]){ aiCode = ai4; aiDef = GS1_AI_TABLE[ai4]; }
+      else if(GS1_AI_TABLE[ai2]){ aiCode = ai2; aiDef = GS1_AI_TABLE[ai2]; }
+      else break; // unrecognized AI: targeted parser stops rather than guessing
+      i += aiCode.length;
+      if(aiDef.len === -1){
+        var end = s.indexOf(GS1_GS, i);
+        if(end === -1) end = s.length;
+        i = end;
+      } else {
+        var val = s.substr(i, aiDef.len);
+        if(val.length < aiDef.len) break; // truncated read
+        i += aiDef.len;
+        recognizedAny = true;
+        if(aiDef.type === 'gtin'){
+          if(!isValidGtin(val)) return null;
+          result.gtin = val;
+        } else if(aiDef.type === 'weight'){
+          var n = parseInt(val,10);
+          if(!isNaN(n)) result.weightKg = n / Math.pow(10, aiDef.decimals);
+        }
+      }
+    }
+    if(!recognizedAny || result.weightKg === null || result.weightKg <= 0) return null;
+    return result;
+  }
+
+  function evaluateCode(rawCode){
+    var code = String(rawCode).trim();
+    if(/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(code)){
+      return evaluateEanWeight(code);
+    }
+    if(code.length > 14){
+      var gs1 = parseGS1_128(code);
+      if(gs1) return { ok:true, weightKg: gs1.weightKg, gtin: gs1.gtin };
+      return { ok:false, reason:'gs1' };
+    }
+    return { ok:false, reason:'format' };
+  }
+
+  function statusMessageFor(code, reason){
+    if(reason === 'checksum') return 'Cifra di controllo non valida: ' + code;
+    if(reason === 'prefix') return 'Prefisso non ammesso: ' + code;
+    if(reason === 'gs1') return 'Codice GS1-128 non riconosciuto: ' + code;
+    return 'Codice non valido: ' + code;
   }
 
   function tryAddCode(code){
     code = String(code).trim();
     var now = Date.now();
-    var w = parseWeight(code);
-    if(w === null || w <= 0){
-      camStatus.textContent = 'Codice non valido: ' + code;
+    var res = evaluateCode(code);
+    if(!res.ok){
+      camStatus.textContent = statusMessageFor(code, res.reason);
       return false;
     }
-    state.items.push({ code: code, weightKg: w, ts: now });
+    var last = state.lastCodeTs[code];
+    if(last && (now - last) < DUPLICATE_WINDOW_MS){
+      if(!confirm('Codice già letto pochi secondi fa. Aggiungere comunque?')){
+        camStatus.textContent = 'Lettura annullata (duplicato): ' + code;
+        return false;
+      }
+    }
+    var weightG = Math.round(res.weightKg * 1000);
+    state.items.push({ code: code, weightG: weightG, ts: now });
+    state.lastCodeTs[code] = now;
     saveState();
     render();
-    flashAdd(w);
+    flashAdd(weightG/1000);
     if(navigator.vibrate) navigator.vibrate(60);
-    camStatus.textContent = 'Aggiunto ' + fmtKg(w) + ' kg  \u2022  ' + code;
+    camStatus.textContent = 'Aggiunto ' + fmtKg(weightG/1000) + ' kg  •  ' + code;
     return true;
   }
+
+  // ---- CSV export ----
+  function exportCsv(){
+    if(state.items.length === 0){
+      camStatus.textContent = 'Nessuna lettura da esportare.';
+      return;
+    }
+    function csvCell(v){
+      v = String(v);
+      if(v.indexOf(';')>=0 || v.indexOf('"')>=0 || v.indexOf('\n')>=0){
+        v = '"' + v.replace(/"/g,'""') + '"';
+      }
+      return v;
+    }
+    var rows = [['Codice','Peso_kg','Data_ora']];
+    state.items.forEach(function(it){
+      rows.push([it.code, fmtKg(it.weightG/1000), new Date(it.ts).toLocaleString('it-IT')]);
+    });
+    var csv = rows.map(function(r){ return r.map(csvCell).join(';'); }).join('\r\n');
+    var blob = new Blob(['﻿' + csv], { type:'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var pad = function(n){ return (n<10?'0':'')+n; };
+    var now = new Date();
+    var fname = 'pesoscan_' + now.getFullYear() + pad(now.getMonth()+1) + pad(now.getDate()) + '_' + pad(now.getHours()) + pad(now.getMinutes()) + '.csv';
+    var a = document.createElement('a');
+    a.href = url; a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  btnExport.addEventListener('click', exportCsv);
 
   // ---- camera / detection ----
   function supportsDetector(){
@@ -431,6 +625,50 @@
 
   function stopScan(){
     if(usingFallback) stopScanFallback(); else stopScanNative();
+  }
+
+  function pickBestCode(rawList){
+    for(var i=0;i<rawList.length;i++){
+      if(evaluateCode(rawList[i]).ok) return rawList[i];
+    }
+    return rawList.length ? rawList[0] : null;
+  }
+
+  function handleCandidate(rawCode){
+    candidate = { code: rawCode, ts: Date.now() };
+    var res = evaluateCode(rawCode);
+    candidateBadge.textContent = rawCode + (res.ok ? ('  → ' + fmtKg(res.weightKg) + ' kg') : '  (non valido)');
+    candidateBadge.classList.add('on');
+    candidateBadge.classList.toggle('invalid', !res.ok);
+
+    if(!res.ok){
+      stableCandidate = null;
+      return;
+    }
+    if(stableCandidate && stableCandidate.code === rawCode){
+      stableCandidate.count++;
+    } else {
+      stableCandidate = { code: rawCode, count: 1 };
+    }
+    if(stableCandidate.count >= STABILITY_COUNT){
+      stableCandidate = null;
+      var now = Date.now();
+      if(now - lastCaptureTs >= cfg.cooldown){
+        lastCaptureTs = now;
+        var added = tryAddCode(rawCode);
+        if(added){
+          btnCapture.classList.add('disabled');
+          setTimeout(function(){ btnCapture.classList.remove('disabled'); }, Math.max(250, cfg.cooldown));
+        }
+      }
+    }
+  }
+
+  function handleCandidateMiss(){
+    if(candidate && (Date.now() - candidate.ts) > 500){
+      candidateBadge.classList.remove('on');
+    }
+    stableCandidate = null;
   }
 
   async function startScanNative(){
@@ -452,7 +690,7 @@
     scanning = true;
     btnScan.textContent = 'Ferma scansione';
     btnScan.classList.add('active');
-    camStatus.textContent = 'Inquadra il codice nel riquadro, poi tocca Cattura';
+    camStatus.textContent = 'Inquadra il codice: viene aggiunto da solo quando la lettura è stabile';
     loop();
   }
 
@@ -468,16 +706,17 @@
     btnScan.classList.remove('active');
     camStatus.textContent = '';
     candidate = null;
+    stableCandidate = null;
     candidateBadge.classList.remove('on');
   }
 
   // ---- fallback path for browsers without BarcodeDetector (notably iOS Safari) ----
   async function startScanFallback(){
-    camStatus.textContent = 'Caricamento modulo di scansione\u2026';
+    camStatus.textContent = 'Caricamento modulo di scansione…';
     try{
       await loadHtml5QrcodeLib();
     }catch(e){
-      camStatus.textContent = 'Impossibile caricare il modulo di scansione: serve connessione internet, almeno la prima volta.';
+      camStatus.textContent = 'Impossibile caricare il modulo di scansione.';
       return;
     }
     var fallbackEl = document.getElementById('qrReaderFallback');
@@ -496,17 +735,8 @@
     ];
     html5QrcodeInstance = new Html5Qrcode('qrReaderFallback', { formatsToSupport: formats, verbose:false });
 
-    function onDetected(decodedText){
-      candidate = { code: decodedText, ts: Date.now() };
-      var w = parseWeight(candidate.code);
-      candidateBadge.textContent = candidate.code + (w!==null ? ('  \u2192 ' + fmtKg(w) + ' kg') : '  (formato non valido)');
-      candidateBadge.classList.add('on');
-    }
-    function onScanError(){
-      if(candidate && (Date.now() - candidate.ts) > 800){
-        candidateBadge.classList.remove('on');
-      }
-    }
+    function onDetected(decodedText){ handleCandidate(decodedText); }
+    function onScanError(){ handleCandidateMiss(); }
 
     try{
       await html5QrcodeInstance.start(
@@ -519,7 +749,7 @@
       scanning = true;
       btnScan.textContent = 'Ferma scansione';
       btnScan.classList.add('active');
-      camStatus.textContent = 'Inquadra il codice, poi tocca Cattura (senza riquadro ristretto su iPhone: verifica il codice mostrato prima di catturare)';
+      camStatus.textContent = 'Inquadra il codice: viene aggiunto da solo quando la lettura è stabile';
     }catch(err){
       camStatus.textContent = 'Impossibile accedere alla fotocamera su questo browser.';
       video.style.display = 'block';
@@ -536,6 +766,7 @@
     camFrame.style.display = 'none';
     shutterWrap.style.display = 'none';
     candidate = null;
+    stableCandidate = null;
     candidateBadge.classList.remove('on');
     camStatus.textContent = '';
     var fallbackEl = document.getElementById('qrReaderFallback');
@@ -580,12 +811,10 @@
         if(frame){
           var codes = await detector.detect(frame);
           if(codes && codes.length){
-            candidate = { code: codes[0].rawValue, ts: Date.now() };
-            var w = parseWeight(candidate.code);
-            candidateBadge.textContent = candidate.code + (w!==null ? ('  \u2192 ' + fmtKg(w) + ' kg') : '  (formato non valido)');
-            candidateBadge.classList.add('on');
-          } else if(candidate && (Date.now() - candidate.ts) > 500){
-            candidateBadge.classList.remove('on');
+            var chosen = pickBestCode(codes.map(function(c){return c.rawValue;}));
+            if(chosen) handleCandidate(chosen);
+          } else {
+            handleCandidateMiss();
           }
         }
       }catch(e){ /* ignore transient detection errors */ }
@@ -608,6 +837,7 @@
     lastCaptureTs = now;
     var added = tryAddCode(candidate.code);
     if(added){
+      stableCandidate = null;
       btnCapture.classList.add('disabled');
       setTimeout(function(){ btnCapture.classList.remove('disabled'); }, Math.max(250, cfg.cooldown));
     }
@@ -645,6 +875,9 @@
     document.getElementById('cfgLen').value = cfg.len;
     document.getElementById('cfgDiv').value = cfg.div;
     document.getElementById('cfgCooldown').value = cfg.cooldown;
+    document.getElementById('cfgPrefixOn').checked = cfg.prefixOn;
+    document.getElementById('cfgPrefixMin').value = cfg.prefixMin;
+    document.getElementById('cfgPrefixMax').value = cfg.prefixMax;
     dlg.showModal();
   });
   document.getElementById('cfgCancel').addEventListener('click', function(){ dlg.close(); });
@@ -654,9 +887,40 @@
     cfg.div = parseInt(document.getElementById('cfgDiv').value,10) || defaultCfg.div;
     cfg.cooldown = parseInt(document.getElementById('cfgCooldown').value,10);
     if(isNaN(cfg.cooldown)) cfg.cooldown = defaultCfg.cooldown;
+    cfg.prefixOn = document.getElementById('cfgPrefixOn').checked;
+    var pMin = parseInt(document.getElementById('cfgPrefixMin').value,10);
+    var pMax = parseInt(document.getElementById('cfgPrefixMax').value,10);
+    if(isNaN(pMin)) pMin = defaultCfg.prefixMin;
+    if(isNaN(pMax)) pMax = defaultCfg.prefixMax;
+    cfg.prefixMin = Math.min(pMin, pMax);
+    cfg.prefixMax = Math.max(pMin, pMax);
     saveCfg();
     dlg.close();
   });
+
+  // ---- PWA install prompt ----
+  window.addEventListener('beforeinstallprompt', function(e){
+    e.preventDefault();
+    window.__deferredInstallPrompt = e;
+    btnInstall.style.display = 'inline-block';
+  });
+  btnInstall.addEventListener('click', function(){
+    var promptEvent = window.__deferredInstallPrompt;
+    if(!promptEvent) return;
+    promptEvent.prompt();
+    promptEvent.userChoice.finally(function(){
+      window.__deferredInstallPrompt = null;
+      btnInstall.style.display = 'none';
+    });
+  });
+  window.addEventListener('appinstalled', function(){
+    btnInstall.style.display = 'none';
+  });
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(){});
+    });
+  }
 
   render();
 })();
