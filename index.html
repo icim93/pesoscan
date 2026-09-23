@@ -133,7 +133,7 @@
   .candidate-badge span.invalid{border-color:rgba(196,87,74,.65); color:var(--danger);}
   .shutter-wrap{
     position:absolute; left:0; right:0; bottom:34px;
-    display:flex; justify-content:center; pointer-events:none;
+    display:flex; align-items:center; justify-content:center; gap:16px; pointer-events:none;
   }
   #btnCapture{
     pointer-events:auto;
@@ -144,6 +144,18 @@
   }
   #btnCapture:active{ transform:scale(.93); }
   #btnCapture.disabled{ background:var(--muted); pointer-events:none; opacity:.6; }
+  #btnOcr{
+    pointer-events:auto;
+    height:40px; padding:0 14px; border-radius:12px;
+    background:rgba(10,14,22,.82); border:1px solid rgba(227,178,60,.55); color:var(--gold);
+    font-size:11.5px; font-weight:700; letter-spacing:.03em;
+  }
+  #btnOcr.busy{ opacity:.6; pointer-events:none; }
+  .ocr-raw{
+    background:var(--ink-2); border:1px solid var(--line); border-radius:8px;
+    padding:8px 10px; font-family:var(--mono); font-size:11px; color:var(--muted);
+    max-height:70px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;
+  }
 
   .manual{
     margin:0 18px 8px; display:flex; gap:8px;
@@ -246,6 +258,7 @@
   <div class="cam-frame" id="camFrame" style="display:none;"></div>
   <div class="candidate-badge"><span id="candidateBadge"></span></div>
   <div class="shutter-wrap" id="shutterWrap" style="display:none;">
+    <button id="btnOcr" title="Leggi peso stampato (senza barcode)">Leggi peso</button>
     <button id="btnCapture" title="Cattura">Cattura</button>
   </div>
   <div class="cam-status" id="camStatus"></div>
@@ -311,6 +324,28 @@
   </div>
 </dialog>
 
+<dialog id="ocrDlg">
+  <div class="dlg-body">
+    <h2>Peso letto dall'etichetta</h2>
+    <div class="field">
+      <label>Peso (kg)</label>
+      <input type="number" id="ocrWeight" min="0" step="0.001" inputmode="decimal">
+    </div>
+    <div class="field">
+      <label>Riferimento (opzionale)</label>
+      <input type="text" id="ocrNote" placeholder="es. lotto, fornitore...">
+    </div>
+    <div class="field">
+      <label>Testo riconosciuto</label>
+      <div id="ocrRawText" class="ocr-raw"></div>
+    </div>
+    <div class="dlg-actions">
+      <button class="cancel" id="ocrCancel">Annulla</button>
+      <button class="save" id="ocrConfirm">Aggiungi</button>
+    </div>
+  </div>
+</dialog>
+
 <script>
 (function(){
   "use strict";
@@ -347,6 +382,11 @@
   var candidateBadge = document.getElementById('candidateBadge');
   var shutterWrap = document.getElementById('shutterWrap');
   var btnCapture = document.getElementById('btnCapture');
+  var btnOcr = document.getElementById('btnOcr');
+  var ocrDlg = document.getElementById('ocrDlg');
+  var ocrWeightInput = document.getElementById('ocrWeight');
+  var ocrNoteInput = document.getElementById('ocrNote');
+  var ocrRawText = document.getElementById('ocrRawText');
 
   var stream = null;
   var detector = null;
@@ -360,6 +400,8 @@
   var usingFallback = false;
   var html5QrcodeInstance = null;
   var html5QrcodeLibPromise = null;
+  var ocrWorker = null;
+  var ocrWorkerPromise = null;
 
   function loadHtml5QrcodeLib(){
     if(window.Html5Qrcode) return Promise.resolve();
@@ -372,6 +414,53 @@
       document.head.appendChild(s);
     });
     return html5QrcodeLibPromise;
+  }
+
+  // Labels with no barcode (plain text "Net weight: 15,670 kg") are read via
+  // on-device OCR instead. The recognizer is lazy-loaded and reused, and its
+  // language data is fetched once from a CDN and then kept by the service
+  // worker's cache for offline use afterward.
+  function loadOcrWorker(){
+    if(ocrWorker) return Promise.resolve(ocrWorker);
+    if(ocrWorkerPromise) return ocrWorkerPromise;
+    ocrWorkerPromise = (async function(){
+      if(!window.Tesseract){
+        await new Promise(function(resolve, reject){
+          var s = document.createElement('script');
+          s.src = 'vendor/tesseract.min.js';
+          s.onload = function(){ resolve(); };
+          s.onerror = function(){ reject(new Error('load-failed')); };
+          document.head.appendChild(s);
+        });
+      }
+      // Paths must be absolute and the worker must not be blob-wrapped: the
+      // core's own wasm-loading code resolves its sibling .wasm file
+      // relative to the worker's own location, which breaks (can't parse a
+      // relative URL) inside a blob: worker.
+      var worker = await Tesseract.createWorker('eng', 1, {
+        workerPath: new URL('vendor/worker.min.js', document.baseURI).href,
+        corePath: new URL('vendor/tesseract-core-simd-lstm.js', document.baseURI).href,
+        langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int',
+        gzip: true,
+        workerBlobURL: false
+      });
+      await worker.setParameters({ tessedit_char_whitelist: '0123456789.,kKgG ' });
+      ocrWorker = worker;
+      return worker;
+    })();
+    return ocrWorkerPromise;
+  }
+
+  // Net weight on these labels is consistently printed as "NN,NNN kg" (2-3
+  // decimals, comma or dot). Matching that shape is language-independent, so
+  // we don't need to recognize "peso netto" / "net weight" / etc.
+  var OCR_WEIGHT_RE = /(\d{1,3}[.,]\d{2,3})\s*k\s*g/i;
+  function parseOcrWeightKg(text){
+    var m = String(text).match(OCR_WEIGHT_RE);
+    if(!m) return null;
+    var v = parseFloat(m[1].replace(',', '.'));
+    if(isNaN(v) || v <= 0) return null;
+    return v;
   }
 
   function loadCfg(){
@@ -818,8 +907,18 @@
   var GUIDE_INSET = 0.14;
   var DETECT_INSET = 0.07;
 
+  // The native path streams into our own <video>; the fallback library owns
+  // a video element of its own inside #qrReaderFallback. OCR capture needs to
+  // read from whichever one is actually live.
+  function getActiveVideoEl(){
+    if(usingFallback) return document.querySelector('#qrReaderFallback video');
+    return video;
+  }
+
   function cropToGuide(){
-    var vw = video.videoWidth, vh = video.videoHeight;
+    var v = getActiveVideoEl();
+    if(!v) return null;
+    var vw = v.videoWidth, vh = v.videoHeight;
     if(!vw || !vh) return null;
     var x = Math.round(vw * DETECT_INSET);
     var y = Math.round(vh * DETECT_INSET);
@@ -827,7 +926,7 @@
     var h = Math.round(vh * (1 - 2*DETECT_INSET));
     cropCanvas.width = w;
     cropCanvas.height = h;
-    cropCtx.drawImage(video, x, y, w, h, 0, 0, w, h);
+    cropCtx.drawImage(v, x, y, w, h, 0, 0, w, h);
     return cropCanvas;
   }
 
@@ -871,6 +970,58 @@
       btnCapture.classList.add('disabled');
       setTimeout(function(){ btnCapture.classList.remove('disabled'); }, Math.max(250, cfg.cooldown));
     }
+  });
+
+  async function runOcr(){
+    var frame = cropToGuide();
+    if(!frame){
+      camStatus.textContent = 'Fotocamera non pronta: riprova tra un istante.';
+      return;
+    }
+    btnOcr.classList.add('busy');
+    btnOcr.textContent = '...';
+    camStatus.textContent = 'Lettura del testo in corso…';
+    try{
+      var worker = await loadOcrWorker();
+      var result = await worker.recognize(frame);
+      var text = (result && result.data && result.data.text) || '';
+      openOcrDialog(parseOcrWeightKg(text), text);
+      camStatus.textContent = '';
+    }catch(e){
+      camStatus.textContent = 'Lettura del testo non riuscita: serve connessione internet la prima volta.';
+    }finally{
+      btnOcr.classList.remove('busy');
+      btnOcr.textContent = 'Leggi peso';
+    }
+  }
+  btnOcr.addEventListener('click', runOcr);
+
+  function openOcrDialog(parsedKg, rawText){
+    ocrWeightInput.value = parsedKg !== null ? parsedKg.toFixed(3) : '';
+    ocrNoteInput.value = '';
+    ocrRawText.textContent = rawText.trim() || '(nessun testo riconosciuto)';
+    ocrDlg.showModal();
+  }
+  document.getElementById('ocrCancel').addEventListener('click', function(){ ocrDlg.close(); });
+  document.getElementById('ocrConfirm').addEventListener('click', function(){
+    var kg = parseFloat(String(ocrWeightInput.value).replace(',', '.'));
+    if(isNaN(kg) || kg <= 0){
+      ocrWeightInput.focus();
+      return;
+    }
+    var note = ocrNoteInput.value.trim();
+    var now = Date.now();
+    var d = new Date(now);
+    var pad = function(n){ return (n<10?'0':'')+n; };
+    var code = 'OCR-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + (note ? (' ' + note) : '');
+    var weightG = Math.round(kg * 1000);
+    state.items.push({ code: code, weightG: weightG, ts: now });
+    saveState();
+    render();
+    flashAdd(kg);
+    if(navigator.vibrate) navigator.vibrate(60);
+    ocrDlg.close();
+    camStatus.textContent = 'Aggiunto ' + fmtKg(kg) + ' kg (OCR)  •  ' + code;
   });
 
   btnUndo.addEventListener('click', function(){

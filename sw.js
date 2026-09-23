@@ -1,9 +1,13 @@
-var CACHE = 'pesoscan-v1';
+var CACHE = 'pesoscan-v2';
 var ASSETS = [
   './',
   './index.html',
   './manifest.webmanifest',
   './vendor/html5-qrcode.min.js',
+  './vendor/tesseract.min.js',
+  './vendor/worker.min.js',
+  './vendor/tesseract-core-simd-lstm.js',
+  './vendor/tesseract-core-simd-lstm.wasm',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png'
