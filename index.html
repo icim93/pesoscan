@@ -552,6 +552,28 @@
     return 'Codice non valido: ' + code;
   }
 
+  // A misread can still pass the GTIN checksum by chance (~1 in 10). When it
+  // does, the wrong code usually differs from the correct one by only a
+  // couple of digits, so we also flag same-length codes that are very close
+  // to one just added, not only exact repeats.
+  var SIMILAR_MAX_DISTANCE = 2;
+  function hammingDistance(a, b){
+    if(a.length !== b.length) return Infinity;
+    var d = 0;
+    for(var i=0;i<a.length;i++){ if(a[i] !== b[i]) d++; }
+    return d;
+  }
+  function findRecentSimilarCode(code, now){
+    for(var i=state.items.length-1;i>=0;i--){
+      var it = state.items[i];
+      if(now - it.ts > DUPLICATE_WINDOW_MS) break; // items are chronological; older ones can't be in the window either
+      if(it.code === code) continue;
+      var dist = hammingDistance(code, it.code);
+      if(dist > 0 && dist <= SIMILAR_MAX_DISTANCE) return it.code;
+    }
+    return null;
+  }
+
   function tryAddCode(code){
     code = String(code).trim();
     var now = Date.now();
@@ -561,9 +583,14 @@
       return false;
     }
     var last = state.lastCodeTs[code];
-    if(last && (now - last) < DUPLICATE_WINDOW_MS){
-      if(!confirm('Codice già letto pochi secondi fa. Aggiungere comunque?')){
-        camStatus.textContent = 'Lettura annullata (duplicato): ' + code;
+    var isExactDup = last && (now - last) < DUPLICATE_WINDOW_MS;
+    var similarCode = isExactDup ? null : findRecentSimilarCode(code, now);
+    if(isExactDup || similarCode){
+      var msg = isExactDup
+        ? 'Codice già letto pochi secondi fa. Aggiungere comunque?'
+        : 'Codice simile a una lettura recente (' + similarCode + '): potrebbe essere un errore di lettura. Aggiungere comunque?';
+      if(!confirm(msg)){
+        camStatus.textContent = 'Lettura annullata (' + (isExactDup ? 'duplicato' : 'codice simile') + '): ' + code;
         return false;
       }
     }
@@ -674,7 +701,7 @@
   async function startScanNative(){
     try{
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width:{ideal:1280}, height:{ideal:960} },
+        video: { facingMode: { ideal: 'environment' }, width:{ideal:1920}, height:{ideal:1440} },
         audio: false
       });
     }catch(err){
@@ -784,17 +811,20 @@
   }
 
   // The visual guide box insets the video by 14% on every side (see .cam-frame).
-  // We crop detection to that same region so codes outside the frame (e.g. the
-  // barcode on the layer below) are never picked up.
+  // The actual detection crop uses a smaller inset than the visible guide, so
+  // a barcode framed right at the guide's edge still keeps its quiet-zone
+  // margin in the analyzed image instead of being clipped (clipping the quiet
+  // zone is a common cause of misread edge digits).
   var GUIDE_INSET = 0.14;
+  var DETECT_INSET = 0.07;
 
   function cropToGuide(){
     var vw = video.videoWidth, vh = video.videoHeight;
     if(!vw || !vh) return null;
-    var x = Math.round(vw * GUIDE_INSET);
-    var y = Math.round(vh * GUIDE_INSET);
-    var w = Math.round(vw * (1 - 2*GUIDE_INSET));
-    var h = Math.round(vh * (1 - 2*GUIDE_INSET));
+    var x = Math.round(vw * DETECT_INSET);
+    var y = Math.round(vh * DETECT_INSET);
+    var w = Math.round(vw * (1 - 2*DETECT_INSET));
+    var h = Math.round(vh * (1 - 2*DETECT_INSET));
     cropCanvas.width = w;
     cropCanvas.height = h;
     cropCtx.drawImage(video, x, y, w, h, 0, 0, w, h);
