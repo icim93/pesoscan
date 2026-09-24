@@ -576,7 +576,7 @@
     var digits = code.substring(start, start+len);
     var grams = parseInt(digits, 10);
     if(isNaN(grams) || grams <= 0) return { ok:false, reason:'format' };
-    return { ok:true, weightKg: grams / cfg.div };
+    return { ok:true, weightKg: grams / cfg.div, kind:'ean' };
   }
 
   // ---- targeted GS1-128 parser: AI(01) GTIN, AI(10) lot, AI(15/17) dates, AI(3100-3105) net weight kg ----
@@ -645,7 +645,7 @@
     }
     if(code.length > 14){
       var gs1 = parseGS1_128(code);
-      if(gs1) return { ok:true, weightKg: gs1.weightKg, gtin: gs1.gtin };
+      if(gs1) return { ok:true, weightKg: gs1.weightKg, gtin: gs1.gtin, kind:'gs1' };
       return { ok:false, reason:'gs1' };
     }
     return { ok:false, reason:'format' };
@@ -760,17 +760,37 @@
     if(usingFallback) stopScanFallback(); else stopScanNative();
   }
 
+  // Labels can carry both a short EAN and a GS1-128 barcode. The GS1-128 one
+  // states the net weight explicitly and is protected by Code128's much
+  // stronger check, while the EAN on some supplier labels misreads often, so
+  // a valid GS1-128 read always wins over an EAN.
   function pickBestCode(rawList){
+    var firstValid = null;
     for(var i=0;i<rawList.length;i++){
-      if(evaluateCode(rawList[i]).ok) return rawList[i];
+      var res = evaluateCode(rawList[i]);
+      if(!res.ok) continue;
+      if(res.kind === 'gs1') return rawList[i];
+      if(firstValid === null) firstValid = rawList[i];
     }
+    if(firstValid !== null) return firstValid;
     return rawList.length ? rawList[0] : null;
   }
 
+  // The decoder doesn't report both barcodes in every frame, so a frame
+  // holding only the EAN (or a misread of it) between two GS1-128 frames
+  // would otherwise reset the GS1 read's stability count. For a short while
+  // after a GS1-128 read, any other read is ignored instead.
+  var GS1_PRIORITY_MS = 1000;
+  var lastGs1SeenTs = 0;
+
   function handleCandidate(rawCode){
     var code = stripAimPrefix(rawCode);
-    candidate = { code: code, ts: Date.now() };
     var res = evaluateCode(code);
+    var nowTs = Date.now();
+    var isGs1 = res.ok && res.kind === 'gs1';
+    if(isGs1) lastGs1SeenTs = nowTs;
+    else if(nowTs - lastGs1SeenTs < GS1_PRIORITY_MS) return;
+    candidate = { code: code, ts: nowTs };
     candidateBadge.textContent = code + (res.ok ? ('  → ' + fmtKg(res.weightKg) + ' kg') : '  (non valido)');
     candidateBadge.classList.add('on');
     candidateBadge.classList.toggle('invalid', !res.ok);
