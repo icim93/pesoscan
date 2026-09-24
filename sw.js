@@ -1,4 +1,4 @@
-var CACHE = 'pesoscan-v3';
+var CACHE = 'pesoscan-v4';
 var ASSETS = [
   './',
   './index.html',
@@ -39,17 +39,40 @@ self.addEventListener('activate', function(e){
   );
 });
 
+function putInCache(request, resp){
+  if(resp && resp.status === 200){
+    var copy = resp.clone();
+    caches.open(CACHE).then(function(c){ c.put(request, copy); });
+  }
+  return resp;
+}
+
 self.addEventListener('fetch', function(e){
   if(e.request.method !== 'GET') return;
+
+  // The page itself is network-first: when online, every open gets the
+  // latest deployed version right away. The cached copy is only the
+  // offline fallback. (Serving it cache-first meant a deploy that only
+  // changed the page showed up one launch late, with no update notice.)
+  if(e.request.mode === 'navigate'){
+    e.respondWith(
+      fetch(e.request)
+        .then(function(resp){ return putInCache(e.request, resp); })
+        .catch(function(){
+          return caches.match(e.request).then(function(cached){
+            return cached || caches.match('./index.html');
+          });
+        })
+    );
+    return;
+  }
+
+  // Everything else (libraries, icons, OCR data) is cache-first.
   e.respondWith(
     caches.match(e.request).then(function(cached){
-      var fetchPromise = fetch(e.request).then(function(resp){
-        if(resp && resp.status === 200){
-          var copy = resp.clone();
-          caches.open(CACHE).then(function(c){ c.put(e.request, copy); });
-        }
-        return resp;
-      }).catch(function(){ return cached; });
+      var fetchPromise = fetch(e.request)
+        .then(function(resp){ return putInCache(e.request, resp); })
+        .catch(function(){ return cached; });
       return cached || fetchPromise;
     })
   );
